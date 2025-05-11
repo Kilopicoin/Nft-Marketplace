@@ -992,3 +992,20 @@ a:hover::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* Zebra striping for dark mode */
+.dark-mode .market-table tbody tr:nth-child(even) {
+  background-color: #1a1a1a; /* Slightly lighter than dark background */
+}
+
+.dark-mode .market-table tbody tr:nth-child(odd) {
+  background-color: #121212; /* Matches the default dark bg */
+}
+
+
+.dark-mode .market-table thead th {
+  background-color: #1e1e1e; /* Or #2a2a2a for slightly lighter */
+  color: #f0f0f0;
+  border-color: #333;
+}

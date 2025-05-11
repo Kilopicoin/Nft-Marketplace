@@ -1,8 +1,9 @@
 /* global BigInt */
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { getContract, getSignerContract } from './contract';
+import { getContract, getSignerContract, contractAddress } from './contract';
 import './App.css';
+import { getTokenSignerContract } from './Tokencontract';
 
 // React Icons
 import {
@@ -13,6 +14,7 @@ import {
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
+
 function App() {
   // --------------------------------------------------
   // 1) State
@@ -20,7 +22,7 @@ function App() {
   const [view, setView] = useState('createNFT');
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
 
   // We remove the old states for feedback; we will use toast messages:
   // const [errorMessage, setErrorMessage] = useState(null);
@@ -55,6 +57,10 @@ function App() {
 
   const [showMyNfts, setShowMyNfts] = useState(false);
 const [showMyCollections, setShowMyCollections] = useState(false);
+
+// Constants
+const LIST_NFT_PRICE = (1000 * 10 ** 6).toString();
+const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
 
 
   // SEARCH NFT
@@ -223,17 +229,20 @@ const [showMyCollections, setShowMyCollections] = useState(false);
   const tokenId = tid.toString(); // ✅ Convert BigInt to string
   const d = await c.getNFTData(tokenId);
   arr.push({
-    tokenId,
-    name: d[0],
-    description: d[1],
-    url: resolveImageUrl(d[2]),
-    creator: d[3],
-    createdTime: new Date(Number(d[4]) * 1000).toLocaleString(),
-    royaltyRate: d[5]?.toString() || '0',
-    mainCategory: d[6],
-    subCategory: d[7],
-    collId: d[8]
-  });
+  tokenId,
+  name: d[0],
+  description: d[1],
+  url: resolveImageUrl(d[2]),
+  metaUrl: d[3], // ✅ new
+  creator: d[4],
+  createdTime: new Date(Number(d[5]) * 1000).toLocaleString(),
+  royaltyRate: d[6]?.toString() || '0',
+  mainCategory: d[7],
+  subCategory: d[8],
+  collId: d[9],
+  idx: d[10]
+});
+
 }
 
       setMyNFTs(arr);
@@ -438,14 +447,20 @@ const [showMyCollections, setShowMyCollections] = useState(false);
   // --------------------------------------------------
   const handleListNFT = async () => {
     if (!listTokenId || !price) {
-      toast.error('Please enter Token ID and price!');
-      return;
-    }
+    toast.error('Please enter Token ID and price!');
+    return;
+  }
+
+  // Validate price is numeric
+  if (isNaN(price) || Number(price) <= 0) {
+    toast.error('Price must be a positive number');
+    return;
+  }
     try {
       setLoading(true);
       const c = getContract();
       const d = await c.getNFTData(listTokenId);
-      const collId = d[8].toString();
+      const collId = d[9].toString();
 
       if (collId !== "0") {
         const priceOnColl = await c.getCollectionNftPrice(collId, listTokenId);
@@ -456,8 +471,12 @@ const [showMyCollections, setShowMyCollections] = useState(false);
         }
       }
 
+      const tokenContractSigner = await getTokenSignerContract();
+    const allowanceTx = await tokenContractSigner.increaseAllowance(contractAddress, LIST_NFT_PRICE);
+    await allowanceTx.wait();
+
       const sc = await getSignerContract();
-      const tx = await sc.listNFT(listTokenId, price);
+      const tx = await sc.listNFT(listTokenId, price * 10 ** 6);
       await tx.wait();
 
       toast.success(`NFT #${listTokenId} listed!`);
@@ -473,36 +492,31 @@ const [showMyCollections, setShowMyCollections] = useState(false);
   };
 
   const handleBuyNFT = async (tid, rawPrice) => {
-    try {
-      setLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      const signer = await provider.getSigner();
-      const bal = await provider.getBalance(await signer.getAddress());
-      const priceBN = BigInt(rawPrice || '0');
-      if (bal < priceBN) {
-        toast.error('Insufficient balance!');
-        setLoading(false);
-        return;
-      }
+  try {
+    setLoading(true);
 
-      const sc = new ethers.Contract(
-        getContract().target,
-        getContract().interface.fragments,
-        signer
-      );
-      const tx = await sc.buyNFT(tid, { value: rawPrice });
-      await tx.wait();
+    const tokenContractSigner = await getTokenSignerContract();
 
-      toast.success(`NFT #${tid} purchased!`);
-      await fetchListedItems();
-      await fetchMyNFTs(); 
-    } catch (err) {
-      toast.error(err.message || String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Approve the market contract to spend the buyer's tokens
+    const allowanceTx = await tokenContractSigner.increaseAllowance(contractAddress, rawPrice);
+    await allowanceTx.wait();
+
+    const sc = await getSignerContract();
+
+    // Correct: Do NOT pass { value: rawPrice } – payment is via ERC-20
+    const tx = await sc.buyNFT(tid);
+    await tx.wait();
+
+    toast.success(`NFT #${tid} purchased!`);
+    await fetchListedItems();
+    await fetchMyNFTs(); 
+  } catch (err) {
+    toast.error(err.message || String(err));
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleUnlist = async (tid) => {
     try {
@@ -531,13 +545,17 @@ const [showMyCollections, setShowMyCollections] = useState(false);
         name: d[0],
         description: d[1],
         url: resolveImageUrl(d[2]),
-        creator: d[3],
-        createdTime: new Date(Number(d[4]) * 1000).toLocaleString(),
-        royaltyRate: d[5]?.toString() || '0',
-        mainCategory: d[6],
-        subCategory: d[7],
-        collId: d[8]?.toString()
+        metaUrl: d[3], 
+        creator: d[4],
+        createdTime: new Date(Number(d[5]) * 1000).toLocaleString(),
+        royaltyRate: d[6]?.toString() || '0',
+        mainCategory: d[7],
+        subCategory: d[8],
+        collId: d[9]?.toString()
       });
+
+
+
     } catch (err) {
       toast.error(err.message || String(err));
     } finally {
@@ -896,7 +914,7 @@ const [showMyCollections, setShowMyCollections] = useState(false);
     <header className="app-header">
       <div className="app-logo">
         <FaCube style={{ fontSize: '20px' }} />
-        <span>MyNFT Market</span>
+        <span>Kilopi NFT Marketplace</span>
       </div>
       <nav className="app-nav">
         <button
@@ -954,7 +972,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-wallet">
         {account ? (
           <div>
-            <span>Connected account: {account}</span>
+            <span>Connected account: {shortenAddress(account)}</span>
+
             <button
               onClick={() => setAccount(null)}
               className="wallet-btn"
@@ -990,7 +1009,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-content">
         {renderMessages()}
         <h2>Create Single NFT</h2>
-        <p className="note">Wallet: {account || 'Not connected'}</p>
+        <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
+
 
         <div className="form-group">
           <label>Name</label>
@@ -1070,7 +1090,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-content">
         {renderMessages()}
         <h2>Create Collection</h2>
-        <p className="note">Wallet: {account || 'Not connected'}</p>
+        <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
+
 
         <div className="form-group">
           <label>Collection Name</label>
@@ -1250,7 +1271,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-content">
         {renderMessages()}
         <h2>NFT Market</h2>
-        <p className="note">Wallet: {account || 'Not connected'}</p>
+        <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
+
 
         <button className="primary-btn" onClick={() => setShowFilters(!showFilters)} style={{ marginBottom: 20 }}>
           {showFilters ? 'Hide Filters' : 'Show Filters'}
@@ -1333,8 +1355,13 @@ const [showMyCollections, setShowMyCollections] = useState(false);
               <input value={listTokenId} onChange={(e) => setListTokenId(e.target.value)} />
             </div>
             <div className="form-group">
-              <label>Sale Price (wei)</label>
-              <input value={price} onChange={(e) => setPrice(e.target.value)} />
+              <label>Sale Price (LOP Tokens)</label>
+              <input
+  type="number"
+  value={price}
+  onChange={(e) => setPrice(e.target.value)}
+/>
+
             </div>
             <button className="primary-btn" onClick={handleListNFT} disabled={!account}>
               List
@@ -1369,7 +1396,7 @@ const [showMyCollections, setShowMyCollections] = useState(false);
                       ? it.nftDescription.slice(0, 50) + '...'
                       : it.nftDescription}
                   </div>
-                  <div className="nft-card-price">Price: {rawPrice} wei</div>
+                  <div className="nft-card-price">Price: {rawPrice/1000000} LOP Tokens</div>
                 </div>
 
                 <div className="nft-card-actions">
@@ -1399,10 +1426,12 @@ const [showMyCollections, setShowMyCollections] = useState(false);
             <p>Name: {selectedNftDetails.name}</p>
             <p>Description: {selectedNftDetails.description}</p>
             <p>URL: {selectedNftDetails.url}</p>
+            <p>Meta URL: {selectedNftDetails.metaUrl}</p>
             {selectedNftDetails.url && (
               <img style={{ maxWidth: 300, maxHeight: 300 }} src={selectedNftDetails.url} alt="Detail" />
             )}
-            <p>Creator: {selectedNftDetails.creator}</p>
+            <p>Creator: {shortenAddress(selectedNftDetails.creator)}</p>
+
             <p>Created Time: {selectedNftDetails.createdTime}</p>
             <p>Royalty: {selectedNftDetails.royaltyRate}</p>
             <p>
@@ -1428,7 +1457,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-content">
         {renderMessages()}
         <h2>Collection Market</h2>
-        <p className="note">Wallet: {account || 'Not connected'}</p>
+        <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
+
 
         <button
           className="primary-btn"
@@ -1513,7 +1543,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
                     <div style={{ fontWeight: 600, marginBottom: 5 }}>
                       {col.collectionName || `Collection #${col.collectionId}`}
                     </div>
-                    <div>Seller: {col.seller}</div>
+                    <div>Seller: {shortenAddress(col.seller)}</div>
+
                     <div>Total Price: {col.price} wei</div>
                   </div>
 
@@ -1570,7 +1601,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
             <img src={col.imageUrl} alt="Collection Cover" style={{ maxWidth: 300, maxHeight: 300 }} />
           )}
           <p><strong>Created Time:</strong> {col.createdTime}</p>
-          <p><strong>Creator:</strong> {col.creator}</p>
+          <p><strong>Creator:</strong> {shortenAddress(col.creator)}</p>
+
           <p><strong>Total Price (Remaining):</strong> {col.totalPrice || 0} wei</p>
 
           {isListed && isSeller && (
@@ -1632,7 +1664,8 @@ const [showMyCollections, setShowMyCollections] = useState(false);
       <div className="app-content">
         {renderMessages()}
         <h2>Search NFT</h2>
-        <p className="note">Wallet: {account || 'Not connected'}</p>
+        <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
+
 
         <div className="form-group">
           <label>TokenID to search</label>

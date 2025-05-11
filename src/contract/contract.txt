@@ -317,30 +317,39 @@ modifier onlyOwner() {
 
 
     function getNFTData(uint256 tid)
-        public
-        view
-        returns (
-            string memory,  // name
-            string memory,  // desc
-            string memory,  // url
-            address,        // creator
-            uint256,        // cTime
-            uint256,        // rRate
-            string memory,  // mainCat
-            string memory,  // subCat
-            uint256,        // cId
-            uint256         // idx
-        )
-    {
-        if (!_exists(tid)) revert TN();
-        NFTData memory d = _nftD[tid];
-        return (
-            d.name, d.desc, d.url,
-            d.creator, d.cTime, d.rRate,
-            d.mainCat, d.subCat,
-            d.cId, d.idx
-        );
-    }
+    public
+    view
+    returns (
+        string memory,  // name
+        string memory,  // desc
+        string memory,  // url
+        string memory,  // metaUrl ✅ NEW
+        address,        // creator
+        uint256,        // cTime
+        uint256,        // rRate
+        string memory,  // mainCat
+        string memory,  // subCat
+        uint256,        // cId
+        uint256         // idx
+    )
+{
+    if (!_exists(tid)) revert TN();
+    NFTData memory d = _nftD[tid];
+    return (
+        d.name,
+        d.desc,
+        d.url,
+        d.metaUrl,     // ✅ return metaUrl here
+        d.creator,
+        d.cTime,
+        d.rRate,
+        d.mainCat,
+        d.subCat,
+        d.cId,
+        d.idx
+    );
+}
+
 
     // ----------------------------------------------------------------------------
     // NFT Tekil Listing / Satın Alma
