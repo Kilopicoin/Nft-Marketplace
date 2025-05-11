@@ -1,0 +1,694 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+// ----------------------------------------------------------------------------
+// Arayüzler
+// ----------------------------------------------------------------------------
+
+interface IERC165 {
+    function supportsInterface(bytes4 interfaceId) external view returns (bool);
+}
+
+interface IERC20 {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function burn(uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
+}
+
+
+interface IERC721 is IERC165 {
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    function balanceOf(address owner) external view returns (uint256);
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function transferFrom(address from, address to, uint256 tokenId) external;
+    function approve(address to, uint256 tokenId) external;
+    function getApproved(uint256 tokenId) external view returns (address);
+    function setApprovalForAll(address operator, bool _approved) external;
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+}
+
+interface IERC721Metadata is IERC721 {
+    function name() external view returns (string memory);
+    function symbol() external view returns (string memory);
+    function tokenURI(uint256 tokenId) external view returns (string memory); // ✅ Add this line
+}
+
+
+// ----------------------------------------------------------------------------
+// Kısaltılmış Custom Errors
+// ----------------------------------------------------------------------------
+error Z0();      // Zero address
+error IO();      // Invalid Op
+error TN();      // TokenNonexistent
+error NTO();     // NotTokenOwner
+error NA();      // NoApproval
+error IP();      // InvalidPrice
+error NL();      // NotListed
+error IE();      // InsufficientETH
+error UZ();      // Unauthorized
+error AM();      // ArrMismatch
+error R5430();   // Range5430
+error CNL();     // CollNotListed
+error CNO();     // CollNotOwner
+error CAL();     // CollAlreadyListed
+error NICL();    // NftInsideCollListed
+error NSC();     // NotSellerOfCollection
+error NFS();     // NftAlreadySoldOrPriceZero (collection)
+error SS();      // SomeNftSold
+
+// ----------------------------------------------------------------------------
+// MyNFTMarket
+// ----------------------------------------------------------------------------
+    contract MyNFTMarket is IERC721Metadata, ReentrancyGuard {
+    // ERC165 interface IDs
+    bytes4 private constant _ERC165     = 0x01ffc9a7;
+    bytes4 private constant _ERC721     = 0x80ac58cd;
+    bytes4 private constant _ERC721META = 0x5b5e139f;
+
+    // Temel Metadata
+    string private _name;
+    string private _symbol;
+
+    // Sayaçlar
+    uint256 private _curTokenId;
+    uint256 private _curCollId;
+    address public owner;
+
+    // ERC721 Depolama
+    mapping(address => uint256) private _bal;
+    mapping(uint256 => address) private _owns;
+    mapping(uint256 => address) private _tokenAppr;
+    mapping(address => mapping(address => bool)) private _opAppr;
+
+    uint256 private constant MIN_PRICE = 100 * 10 ** 6;       // 100 tokens
+uint256 private constant MAX_PRICE = 100_000 * 10 ** 6;   // 100,000 tokens
+uint256 private constant NFT_LISTING_FEE = 1000 * 10 ** 6;
+uint256 private constant COLLECTION_LISTING_FEE = 10_000 * 10 ** 6;
+
+
+    // NFT Data
+    struct NFTData {
+    string  name;
+    string  desc;
+    string  url;       // 🔵 image URL (for your own frontend)
+    string  metaUrl;   // 🟡 metadata JSON URL (for MetaMask/OpenSea)
+    address creator;
+    uint256 cTime;
+    uint256 rRate;
+    uint256 cId;
+    uint256 idx;
+    string  mainCat;
+    string  subCat;
+}
+
+    mapping(uint256 => NFTData) private _nftD;
+
+    // Tekil NFT Market item
+    struct MarketItem {
+        uint256 tId;
+        address payable seller;
+        uint256 price;
+        bool listed;
+    }
+    mapping(uint256 => MarketItem) private _mItems;
+    MarketItem[] private _allMItems;
+
+    // Koleksiyon
+    struct Collection {
+        string name;
+        string desc;
+        string img;
+        uint256 cTime;
+        address creator;
+        uint256[] tIds;  
+    }
+    mapping(uint256 => Collection) private _colls;
+
+    // Koleksiyon Market item
+    struct CollMItem {
+        uint256 cId;
+        address payable seller;
+        uint256 price;   // Koleksiyonun toplam fiyatı (içindeki NFTlerin toplamı)
+        bool listed;
+    }
+    mapping(uint256 => CollMItem) private _collMItems;
+    CollMItem[] private _allCollM;
+
+    // _collNftPrices[cId][tokenId] = NFT'nin koleksiyon içi fiyatı
+    mapping(uint256 => mapping(uint256 => uint256)) private _collNftPrices;
+
+    event CollectionCreated(uint256 indexed cId, address indexed creator, string name, string img);
+    event CollectionListed(uint256 indexed cId, address indexed seller, uint256 totalPrice);
+    event CollectionUnlisted(uint256 indexed cId);
+    event CollectionNftSold(uint256 indexed cId, uint256 indexed tokenId, address buyer, uint256 price);
+
+    // ----------------------------------------------------------------------------
+
+    IERC20 public paymentToken;
+
+
+    // ----------------------------------------------------------------------------
+    // Constructor
+    // ----------------------------------------------------------------------------
+    constructor(address _tokenAddr) {
+    _name = "MyNFT";
+    _symbol = "MNFT";
+    paymentToken = IERC20(_tokenAddr);
+    owner = msg.sender; // Set the contract deployer as the owner
+}
+
+
+
+modifier onlyOwner() {
+    require(msg.sender == owner, "Not the owner");
+    _;
+}
+
+    // ----------------------------------------------------------------------------
+    // ERC165 - ERC721 - ERC721Metadata
+    // ----------------------------------------------------------------------------
+    function supportsInterface(bytes4 i) external pure override returns (bool) {
+        return (i == _ERC165 || i == _ERC721 || i == _ERC721META);
+    }
+
+    function name() external view override returns (string memory) {
+        return _name;
+    }
+    function symbol() external view override returns (string memory) {
+        return _symbol;
+    }
+
+    // ----------------------------------------------------------------------------
+    // ERC721 Temel Fonksiyonlar
+    // ----------------------------------------------------------------------------
+    function balanceOf(address o) public view override returns (uint256) {
+        if (o == address(0)) revert Z0();
+        return _bal[o];
+    }
+
+    function ownerOf(uint256 tId) public view override returns (address) {
+        address ow = _owns[tId];
+        if (ow == address(0)) revert TN();
+        return ow;
+    }
+
+    function transferFrom(address f, address t, uint256 tid) public override {
+        if (!_isApprOrOwner(msg.sender, tid)) revert NA();
+        _mTransfer(f, t, tid);
+    }
+
+    function approve(address to, uint256 tid) public override {
+        address o = ownerOf(tid);
+        if (to == o) revert IO();
+        if (msg.sender != o && !isApprovedForAll(o, msg.sender)) revert UZ();
+        _approve(to, tid);
+    }
+
+    function getApproved(uint256 tid) public view override returns (address) {
+        if (!_exists(tid)) revert TN();
+        return _tokenAppr[tid];
+    }
+
+    function setApprovalForAll(address op, bool ap) public override {
+        if (op == msg.sender) revert IO();
+        _opAppr[msg.sender][op] = ap;
+        emit ApprovalForAll(msg.sender, op, ap);
+    }
+
+    function isApprovedForAll(address o, address op) public view override returns (bool) {
+        return _opAppr[o][op];
+    }
+
+    // ----------------------------------------------------------------------------
+    // Internal yardımcılar
+    // ----------------------------------------------------------------------------
+    function _exists(uint256 tid) internal view returns (bool) {
+        return _owns[tid] != address(0);
+    }
+
+    function _isApprOrOwner(address s, uint256 tid) internal view returns (bool) {
+        address o = ownerOf(tid);
+        return (s == o || getApproved(tid) == s || isApprovedForAll(o, s));
+    }
+
+    function _approve(address to, uint256 tid) internal {
+        _tokenAppr[tid] = to;
+        emit Approval(ownerOf(tid), to, tid);
+    }
+
+    function _mTransfer(address f, address t, uint256 tid) internal {
+        if (ownerOf(tid) != f) revert NTO();
+        if (t == address(0)) revert Z0();
+        _approve(address(0), tid);
+        _bal[f] -= 1;
+        _bal[t] += 1;
+        _owns[tid] = t;
+        emit Transfer(f, t, tid);
+    }
+
+    // Market item dizisini güncellemek için tek fonksiyon
+    function _updateAllMItems(uint256 tid, MarketItem memory item) internal {
+        bool found;
+        for (uint256 i = 0; i < _allMItems.length; i++) {
+            if (_allMItems[i].tId == tid) {
+                _allMItems[i] = item;
+                found = true;
+                break;
+            }
+        }
+        if (!found) _allMItems.push(item);
+    }
+
+    // Koleksiyon market item dizisini güncellemek için tek fonksiyon
+    function _updateAllCollMItems(uint256 cid, CollMItem memory item) internal {
+        bool found;
+        for (uint256 i = 0; i < _allCollM.length; i++) {
+            if (_allCollM[i].cId == cid) {
+                _allCollM[i] = item;
+                found = true;
+                break;
+            }
+        }
+        if (!found) _allCollM.push(item);
+    }
+
+    // ----------------------------------------------------------------------------
+    // NFT Oluşturma / Bilgileri
+    // ----------------------------------------------------------------------------
+    function createNFT(
+    string memory n,
+    string memory d,
+    string memory u,
+    string memory mu, // new parameter
+    uint256 r,
+    string memory mC,
+    string memory sC
+) public returns (uint256) 
+{
+    if (r > 100) revert IO();
+    _curTokenId++;
+    uint256 nt = _curTokenId;
+    _owns[nt] = msg.sender;
+    _bal[msg.sender] += 1;
+
+    _nftD[nt] = NFTData({
+        name: n,
+        desc: d,
+        url: u,
+        metaUrl: mu, // set metadata URL
+        creator: msg.sender,
+        cTime: block.timestamp,
+        rRate: r,
+        cId: 0,
+        idx: 0,
+        mainCat: mC,
+        subCat: sC
+    });
+
+    emit Transfer(address(0), msg.sender, nt);
+    return nt;
+}
+
+
+    function getNFTData(uint256 tid)
+        public
+        view
+        returns (
+            string memory,  // name
+            string memory,  // desc
+            string memory,  // url
+            address,        // creator
+            uint256,        // cTime
+            uint256,        // rRate
+            string memory,  // mainCat
+            string memory,  // subCat
+            uint256,        // cId
+            uint256         // idx
+        )
+    {
+        if (!_exists(tid)) revert TN();
+        NFTData memory d = _nftD[tid];
+        return (
+            d.name, d.desc, d.url,
+            d.creator, d.cTime, d.rRate,
+            d.mainCat, d.subCat,
+            d.cId, d.idx
+        );
+    }
+
+    // ----------------------------------------------------------------------------
+    // NFT Tekil Listing / Satın Alma
+    // ----------------------------------------------------------------------------
+    function listNFT(uint256 tid, uint256 p) public nonReentrant {
+    if (ownerOf(tid) != msg.sender) revert NTO();
+    if (_mItems[tid].listed) revert CAL();
+    if (p < MIN_PRICE || p > MAX_PRICE) revert IP();
+
+    NFTData memory nd = _nftD[tid];
+    if (nd.cId != 0) {
+        CollMItem memory cItem = _collMItems[nd.cId];
+        if (cItem.listed && _collNftPrices[nd.cId][tid] > 0) revert CAL();
+    }
+
+    // 🔹 Charge NFT listing fee
+    require(paymentToken.transferFrom(msg.sender, address(this), NFT_LISTING_FEE), "Listing fee failed");
+    paymentToken.burn(NFT_LISTING_FEE);
+
+    MarketItem memory item = MarketItem(tid, payable(msg.sender), p, true);
+    _mItems[tid] = item;
+    _updateAllMItems(tid, item);
+}
+
+
+
+
+    function buyNFT(uint256 tid) public nonReentrant {
+    MarketItem storage item = _mItems[tid];
+    if (!item.listed) revert NL();
+
+    NFTData memory nd = _nftD[tid];
+    uint256 price = item.price;
+
+    _handlePayment(msg.sender, item.seller, nd.creator, price, nd.rRate);
+
+    item.listed = false;
+    _updateAllMItems(tid, item);
+    _mTransfer(item.seller, msg.sender, tid);
+}
+
+
+    function unlistNFT(uint256 tid) public {
+        MarketItem storage it = _mItems[tid];
+        if (!it.listed) revert NL();
+        if (it.seller != msg.sender) revert UZ();
+
+        it.listed = false;
+        _updateAllMItems(tid, it);
+    }
+
+    // ----------------------------------------------------------------------------
+    // Tüm Market Itemlarını Görüntüleme
+    // ----------------------------------------------------------------------------
+    function getMarketItem(uint256 tid) public view returns (uint256, address, uint256, bool) {
+        MarketItem memory m = _mItems[tid];
+        return (m.tId, m.seller, m.price, m.listed);
+    }
+
+    function getAllMarketItems() external view returns (MarketItem[] memory) {
+        return _allMItems;
+    }
+
+    function getAllListedItems() external view returns (MarketItem[] memory) {
+        uint256 c;
+        for (uint256 i = 0; i < _allMItems.length; i++) {
+            if (_allMItems[i].listed) c++;
+        }
+        MarketItem[] memory arr = new MarketItem[](c);
+        uint256 ix;
+        for (uint256 j = 0; j < _allMItems.length; j++) {
+            if (_allMItems[j].listed) {
+                arr[ix++] = _allMItems[j];
+            }
+        }
+        return arr;
+    }
+
+    // ----------------------------------------------------------------------------
+    // Kullanıcıya ait Token Id'ler
+    // ----------------------------------------------------------------------------
+    function getOwnedTokenIds(address usr) external view returns (uint256[] memory) {
+        uint256 c;
+        for (uint256 i = 1; i <= _curTokenId; i++) {
+            if (_owns[i] == usr) c++;
+        }
+        uint256[] memory r = new uint256[](c);
+        uint256 ix;
+        for (uint256 j = 1; j <= _curTokenId; j++) {
+            if (_owns[j] == usr) {
+                r[ix++] = j;
+            }
+        }
+        return r;
+    }
+
+    // ----------------------------------------------------------------------------
+    // Koleksiyon Oluşturma / Bilgileri
+    // ----------------------------------------------------------------------------
+    function createCollection(
+    string memory cn,
+    string memory cd,
+    string memory ci,
+    string[] memory n,
+    string[] memory ds,
+    string[] memory us,
+    string[] memory mus, // 🔹 NEW: metadata URLs
+    uint256[] memory rs,
+    string[] memory mc,
+    string[] memory sc
+) public returns (uint256) 
+{
+    uint256 l = n.length;
+    if (l < 5 || l > 30) revert R5430();
+    if (
+        l != ds.length || l != us.length || l != mus.length || // 🔹 Check mus array too
+        l != rs.length || l != mc.length || l != sc.length
+    ) revert AM();
+
+    _curCollId++;
+    uint256 newCID = _curCollId;
+    uint256[] memory tids = new uint256[](l);
+
+    for (uint256 i = 0; i < l; i++) {
+        if (rs[i] > 100) revert IO(); // Royalty check
+
+        _curTokenId++;
+        uint256 nt = _curTokenId;
+        _owns[nt] = msg.sender;
+        _bal[msg.sender] += 1;
+
+        _nftD[nt] = NFTData({
+            name: n[i],
+            desc: ds[i],
+            url: us[i],       // image URL
+            metaUrl: mus[i],  // 🔹 metadata JSON URL
+            creator: msg.sender,
+            cTime: block.timestamp,
+            rRate: rs[i],
+            cId: newCID,
+            idx: i + 1,
+            mainCat: mc[i],
+            subCat: sc[i]
+        });
+
+        tids[i] = nt;
+        emit Transfer(address(0), msg.sender, nt);
+    }
+
+    _colls[newCID] = Collection({
+        name: cn,
+        desc: cd,
+        img: ci,
+        cTime: block.timestamp,
+        creator: msg.sender,
+        tIds: tids
+    });
+
+    return newCID;
+}
+
+
+    function getCollection(uint256 cid)
+        public
+        view
+        returns (
+            string memory, string memory, string memory,
+            uint256, address, uint256[] memory
+        )
+    {
+        Collection memory c = _colls[cid];
+        return (c.name, c.desc, c.img, c.cTime, c.creator, c.tIds);
+    }
+
+    function getCollectionCount() external view returns (uint256) {
+        return _curCollId;
+    }
+
+    // ----------------------------------------------------------------------------
+    // Koleksiyon Listing / Tek Tek Fiyat - Satın Alma
+    // ----------------------------------------------------------------------------
+    function listCollection(uint256 cid, uint256[] memory prices) public nonReentrant {
+    Collection memory col = _colls[cid];
+    uint256[] memory tids = col.tIds;
+    if (tids.length != prices.length) revert AM();
+
+    for (uint256 i = 0; i < tids.length; i++) {
+        if (_owns[tids[i]] != msg.sender) revert CNO();
+        if (_mItems[tids[i]].listed) revert NICL();
+    }
+
+    if (_collMItems[cid].listed) revert CAL();
+
+    uint256 sumPrice;
+    for (uint256 i = 0; i < tids.length; i++) {
+        if (prices[i] < MIN_PRICE || prices[i] > MAX_PRICE) revert IP();
+        _collNftPrices[cid][tids[i]] = prices[i];
+        sumPrice += prices[i];
+    }
+
+    // 🔹 Charge collection listing fee
+    require(paymentToken.transferFrom(msg.sender, address(this), COLLECTION_LISTING_FEE), "Collection fee failed");
+    paymentToken.burn(COLLECTION_LISTING_FEE);
+
+    CollMItem memory item = CollMItem({
+        cId: cid,
+        seller: payable(msg.sender),
+        price: sumPrice,
+        listed: true
+    });
+
+    _collMItems[cid] = item;
+    _updateAllCollMItems(cid, item);
+
+    emit CollectionListed(cid, msg.sender, sumPrice);
+}
+
+
+
+    function unlistCollection(uint256 cid) public {
+        CollMItem storage it = _collMItems[cid];
+        if (!it.listed) revert CNL();
+        if (it.seller != msg.sender) revert UZ();
+
+        it.listed = false;
+        it.price = 0;
+        _updateAllCollMItems(cid, it);
+        emit CollectionUnlisted(cid);
+    }
+
+    function buyCollection(uint256 cid) public nonReentrant {
+    CollMItem storage collItem = _collMItems[cid];
+    if (!collItem.listed) revert CNL();
+    if (collItem.seller == address(0)) revert NSC();
+
+    Collection memory c = _colls[cid];
+    uint256[] memory tIds = c.tIds;
+
+    uint256 totNeed;
+    for (uint256 i = 0; i < tIds.length; i++) {
+        uint256 tid = tIds[i];
+        if (_owns[tid] == collItem.seller && _collNftPrices[cid][tid] > 0) {
+            totNeed += _collNftPrices[cid][tid];
+        }
+    }
+
+    if (totNeed == 0) revert SS();
+
+    collItem.listed = false;
+    collItem.price = 0;
+    _updateAllCollMItems(cid, collItem);
+
+    for (uint256 i = 0; i < tIds.length; i++) {
+        uint256 tid = tIds[i];
+        uint256 nftPrice = _collNftPrices[cid][tid];
+        if (_owns[tid] == collItem.seller && nftPrice > 0) {
+            NFTData memory nd = _nftD[tid];
+            _handlePayment(msg.sender, collItem.seller, nd.creator, nftPrice, nd.rRate);
+            _mTransfer(collItem.seller, msg.sender, tid);
+            _collNftPrices[cid][tid] = 0;
+            emit CollectionNftSold(cid, tid, msg.sender, nftPrice);
+        }
+    }
+}
+
+
+    function buyNftFromCollection(uint256 cId, uint256 tid) public nonReentrant {
+    CollMItem storage collItem = _collMItems[cId];
+    if (!collItem.listed) revert CNL();
+    if (_owns[tid] != collItem.seller) revert CNO();
+
+    uint256 nftPrice = _collNftPrices[cId][tid];
+    if (nftPrice == 0) revert NFS(); // already sold
+
+    NFTData memory nd = _nftD[tid];
+    _handlePayment(msg.sender, collItem.seller, nd.creator, nftPrice, nd.rRate);
+
+    _mTransfer(collItem.seller, msg.sender, tid);
+    _collNftPrices[cId][tid] = 0;
+    emit CollectionNftSold(cId, tid, msg.sender, nftPrice);
+
+    // Update remaining price in the collection
+    uint256 oldPrice = collItem.price;
+    collItem.price = oldPrice > nftPrice ? (oldPrice - nftPrice) : 0;
+    _updateAllCollMItems(cId, collItem);
+}
+
+
+    function getAllCollectionMarketItems() external view returns (CollMItem[] memory) {
+        return _allCollM;
+    }
+
+    function getCollectionNftPrice(uint256 cId, uint256 tId) external view returns (uint256) {
+        return _collNftPrices[cId][tId];
+    }
+
+
+
+    function _handlePayment(
+    address buyer,
+    address seller,
+    address creator,
+    uint256 price,
+    uint256 royaltyRate
+) internal {
+    uint256 burnAmount = (price * 10) / 100;
+    uint256 royalty = (price * royaltyRate) / 100;
+    uint256 sellerAmount = price - burnAmount - royalty;
+
+    require(paymentToken.transferFrom(buyer, address(this), price), "Token transfer failed");
+    paymentToken.burn(burnAmount);
+    if (royalty > 0) {
+        require(paymentToken.transfer(creator, royalty), "Royalty payment failed");
+    }
+    require(paymentToken.transfer(seller, sellerAmount), "Seller payment failed");
+}
+
+function tokenURI(uint256 tokenId) public view returns (string memory) {
+    if (!_exists(tokenId)) revert TN();
+    return _nftD[tokenId].metaUrl;
+}
+
+
+function adminUnlistNFT(uint256 tid) external onlyOwner {
+    MarketItem storage item = _mItems[tid];
+    if (!item.listed) revert NL();
+
+    item.listed = false;
+    _updateAllMItems(tid, item);
+}
+
+
+function adminUnlistCollectionNft(uint256 cId, uint256 tid) external onlyOwner {
+    CollMItem storage collItem = _collMItems[cId];
+    if (!collItem.listed) revert CNL();
+
+    uint256 nftPrice = _collNftPrices[cId][tid];
+    if (nftPrice == 0) revert NFS(); // Already sold or not listed individually
+
+    _collNftPrices[cId][tid] = 0;
+
+    // Update remaining collection price
+    uint256 oldPrice = collItem.price;
+    collItem.price = oldPrice > nftPrice ? (oldPrice - nftPrice) : 0;
+    _updateAllCollMItems(cId, collItem);
+}
+
+
+
+}
+
