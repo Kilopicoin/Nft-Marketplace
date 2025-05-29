@@ -89,6 +89,9 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   const [detailCollSeller, setDetailCollSeller] = useState(null);
   const [detailCollListed, setDetailCollListed] = useState(false);
 
+  const [selectedCollection, setSelectedCollection] = useState(null);
+
+
   // --------------------------------------------------
   // Category data (example)
   // --------------------------------------------------
@@ -107,6 +110,74 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   if (!addr) return '';
   return addr.slice(0, 6) + '...' + addr.slice(-4);
 };
+
+
+
+const handleCollectionClick = async (col) => {
+  try {
+    setSelectedCollection(col.collectionId);
+
+    const c = getContract();
+
+    const nftPromises = col.tokenIds.map(async (tokenId) => {
+      try {
+        const [
+          name,
+          desc,
+          imgUrl,
+          metaUrl,
+          creator,
+          cTime,
+          royaltyRate,
+          mainCat,
+          subCat,
+          cId,
+          idx
+        ] = await c.getNFTData(tokenId);
+
+        // Safe metadata fetch
+        let meta = {};
+        try {
+          if (metaUrl) {
+            const res = await fetch(metaUrl);
+            if (res.ok) {
+              meta = await res.json();
+            }
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch metadata for token ${tokenId}:`, e);
+        }
+
+        return {
+          tokenId: tokenId.toString(),
+          name: meta.name || name || `NFT #${tokenId}`,
+          image: resolveImageUrl(meta.image || imgUrl),
+          description: meta.description || desc || '',
+          creator,
+          createdTime: new Date(Number(cTime) * 1000).toLocaleString(),
+          royaltyRate: royaltyRate?.toString() || '0',
+          mainCategory: mainCat,
+          subCategory: subCat,
+          collId: cId?.toString() || '0',
+          idx: idx?.toString() || '0'
+        };
+      } catch (err) {
+        console.error(`Error processing tokenId ${tokenId}:`, err);
+        return null; // Skip problematic token
+      }
+    });
+
+    const resolved = await Promise.all(nftPromises);
+    const cleanNFTs = resolved.filter(nft => nft !== null);
+    setCollectionNFTs(cleanNFTs);
+    console.log("Loaded collection NFTs:", cleanNFTs);
+
+  } catch (err) {
+    console.error("Error fetching NFTs for collection:", err);
+  }
+};
+
+
 
 
 
@@ -601,13 +672,14 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
     const arr = [];
     for (let i = 0; i < collectionSize; i++) {
       arr.push({
-        name: '',
-        desc: '',
-        url: '',
-        royalty: '',
-        mainCategory: '',
-        subCategory: ''
-      });
+  name: '',
+  desc: '',
+  url: '',
+  metaUrl: '', // ✅ add this line
+  royalty: '',
+  mainCategory: '',
+  subCategory: ''
+});
     }
     setCollectionNFTs(arr);
   }, [collectionSize]);
@@ -634,33 +706,31 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
         return;
       }
       for (let i = 0; i < collectionNFTs.length; i++) {
-        const item = collectionNFTs[i];
-        if (!item.name.trim()) {
-          toast.error(`NFT #${i + 1} name cannot be empty!`);
-          setLoading(false);
-          return;
-        }
-        const rr = parseInt(item.royalty) || 0;
-        if (rr < 0 || rr > 100) {
-          toast.error(`NFT #${i + 1}: Royalty must be 0..100!`);
-          setLoading(false);
-          return;
-        }
+        const nft = collectionNFTs[i];
+  if (!nft.name || !nft.desc || !nft.url || !nft.metaUrl || !nft.royalty || !nft.mainCategory || !nft.subCategory) {
+    alert(`Please fill all fields for NFT #${i + 1}`);
+    return;
+  }
       }
 
       const n = collectionNFTs.map(x => x.name);
       const ds = collectionNFTs.map(x => x.desc);
       const us = collectionNFTs.map(x => x.url);
+      const mus = collectionNFTs.map(x => x.metaUrl); // ✅ new line
+
       const rs = collectionNFTs.map(x => parseInt(x.royalty) || 0);
       const mc = collectionNFTs.map(x => x.mainCategory);
       const sc = collectionNFTs.map(x => x.subCategory);
 
+      console.log({ n, ds, us, mus, rs, mc, sc });
+
+      
       const scn = await getSignerContract();
       const tx = await scn.createCollection(
         collectionName,
         collectionDesc,
         collectionCoverUrl,
-        n, ds, us, rs, mc, sc
+         n, ds, us, mus, rs, mc, sc
       );
       const receipt = await tx.wait();
 
@@ -719,37 +789,55 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   };
 
   const handleListCollectionWithMultiplePrices = async () => {
-    if (!collectionIdToList) {
-      toast.error('Please enter Collection ID!');
+  if (!collectionIdToList) {
+    toast.error('Please enter Collection ID!');
+    return;
+  }
+
+  try {
+    setLoading(true);
+    const c = getContract();
+    const col = await c.getCollection(collectionIdToList);
+    const tokenIds = col[5];
+
+    if (tokenIds.length !== collectionNftPricesToList.length) {
+      toast.error('The number of prices does not match the number of NFTs!');
       return;
     }
-    try {
-      setLoading(true);
-      const c = getContract();
-      const col = await c.getCollection(collectionIdToList);
-      const tokenIds = col[5];
-      if (tokenIds.length !== collectionNftPricesToList.length) {
-        toast.error('The number of prices does not match the number of NFTs!');
-        setLoading(false);
-        return;
+
+    // Validate and convert prices
+    const arrPrices = collectionNftPricesToList.map((p, i) => {
+      const price = parseInt(p);
+      if (isNaN(price) || price < 100) {
+        throw new Error(`Price for NFT #${i + 1} is invalid. Must be ≥ 100.`);
       }
+      return price * 10 ** 6;
+    });
 
-      const arrPrices = collectionNftPricesToList.map(p => parseInt(p || '0'));
-      const signerC = await getSignerContract();
-      const tx = await signerC.listCollection(collectionIdToList, arrPrices);
-      await tx.wait();
+    // Approve token spending
+    const tokenContractSigner = await getTokenSignerContract();
+    const allowanceTx = await tokenContractSigner.increaseAllowance(contractAddress, LIST_COLLECTION_PRICE);
+    await allowanceTx.wait();
 
-      toast.success(`Collection #${collectionIdToList} listed!`);
-      setCollectionIdToList('');
-      setCollectionNftPricesToList([]);
-      setShowCollectionListingForm(false);
-      await fetchAllCollectionMarketItems();
-    } catch (err) {
-      toast.error(err.message || String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
+    // List collection
+    const signerC = await getSignerContract();
+    const tx = await signerC.listCollection(collectionIdToList, arrPrices);
+    await tx.wait();
+
+    toast.success(`Collection #${collectionIdToList} listed successfully!`);
+    setCollectionIdToList('');
+    setCollectionNftPricesToList([]);
+    setShowCollectionListingForm(false);
+    await fetchAllCollectionMarketItems();
+
+  } catch (err) {
+    console.error(err);
+    toast.error(err.message || 'Failed to list collection.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleUnlistCollection = async (cid) => {
     try {
@@ -771,40 +859,38 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   };
 
   const handleBuyCollection = async (cid, rawPrice) => {
-    try {
-      setLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      const signer = await provider.getSigner();
-      const bal = await provider.getBalance(await signer.getAddress());
-      const priceBN = BigInt(rawPrice || '0');
-      if (bal < priceBN) {
-        toast.error('Insufficient balance!');
-        setLoading(false);
-        return;
-      }
+  try {
+    setLoading(true);
 
-      const scn = new ethers.Contract(
-        getContract().target,
-        getContract().interface.fragments,
-        signer
-      );
-      const tx = await scn.buyCollection(cid, { value: rawPrice });
-      await tx.wait();
+    const tokenAmount = BigInt(rawPrice); // rawPrice should be in token's smallest unit (e.g. 10^6)
+    const tokenSigner = await getTokenSignerContract(); // ERC20 signer contract
 
-      toast.success(`Collection #${cid} purchased!`);
-      await fetchAllCollectionMarketItems();
-      await fetchMyCollections();
-      await fetchMyNFTs(); 
-      if (selectedCollectionDetail && selectedCollectionDetail.collectionId === cid.toString()) {
-        setSelectedCollectionDetail(null);
-      }
-    } catch (err) {
-      toast.error(err.message || String(err));
-    } finally {
-      setLoading(false);
+
+      const approvalTx = await tokenSigner.increaseAllowance(contractAddress, tokenAmount);
+      await approvalTx.wait();
+
+
+    const gameSignerContract = await getSignerContract(); // Contract with buyCollection()
+    const tx = await gameSignerContract.buyCollection(cid);
+    await tx.wait();
+
+    toast.success(`Collection #${cid} purchased!`);
+    await fetchAllCollectionMarketItems();
+    await fetchMyCollections();
+    await fetchMyNFTs();
+
+    if (selectedCollectionDetail && selectedCollectionDetail.collectionId === cid.toString()) {
+      setSelectedCollectionDetail(null);
     }
-  };
+
+  } catch (err) {
+    console.error(err);
+    toast.error(err.message || 'Buy failed.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleBuyNftFromCollection = async (cid, tid, rawPrice) => {
     try {
@@ -939,14 +1025,6 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
         >
           <FaStore style={{ marginRight:5 }}/>
           NFT Market
-        </button>
-
-        <button
-          className={`nav-item ${view==='collectionMarket'?'active':''}`}
-          onClick={() => setView('collectionMarket')}
-        >
-          <FaStore style={{ marginRight:5 }}/>
-          Collection Market
         </button>
 
         <button
@@ -1154,6 +1232,18 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
                   }}
                 />
               </div>
+
+              <div className="form-group">
+  <label>Metadata URL</label>
+  <input
+    value={it.metaUrl}
+    onChange={(e) => {
+      const arr = [...collectionNFTs];
+      arr[idx] = { ...arr[idx], metaUrl: e.target.value };
+      setCollectionNFTs(arr);
+    }}
+  />
+</div>
               <div className="form-group">
                 <label>Royalty(%)</label>
                 <input
@@ -1487,7 +1577,7 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
 
             {collectionNftPricesToList.length > 0 && (
               <div style={{ margin: '10px 0', padding: 10, border: '1px solid gray' }}>
-                <h5>Price for each NFT (wei)</h5>
+                <h5>Price for each NFT (LOP Tokens)</h5>
                 {collectionNftPricesToList.map((val, idx) => (
                   <div key={idx} style={{ display: 'flex', alignItems: 'center', marginBottom: 5 }}>
                     <span style={{ marginRight: 10 }}>NFT #{idx+1} Price: </span>
@@ -1545,7 +1635,7 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
                     </div>
                     <div>Seller: {shortenAddress(col.seller)}</div>
 
-                    <div>Total Price: {col.price} wei</div>
+                    <div>Total Price: {col.price} Lop Tokens</div>
                   </div>
 
                   <div className="nft-card-actions" style={{ marginTop: 'auto' }}>
@@ -1603,7 +1693,7 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
           <p><strong>Created Time:</strong> {col.createdTime}</p>
           <p><strong>Creator:</strong> {shortenAddress(col.creator)}</p>
 
-          <p><strong>Total Price (Remaining):</strong> {col.totalPrice || 0} wei</p>
+          <p><strong>Total Price (Remaining):</strong> {col.totalPrice || 0} LOP Tokens</p>
 
           {isListed && isSeller && (
             <button className="secondary-btn" onClick={() => handleUnlistCollection(col.collectionId)}>
@@ -1635,7 +1725,7 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
                   </div>
                   <div style={{ marginTop: 10 }}>TokenID: {nft.tokenId}</div>
                   <div>Royalty: {nft.royaltyRate}%</div>
-                  <div>Price: {p} wei {isSold && '(Sold)'}</div>
+                  <div>Price: {p} LOP Tokens {isSold && '(Sold)'}</div>
                 </div>
 
                 <div className="nft-card-actions">
@@ -1793,11 +1883,69 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   <div className="nft-grid">
     {myCollections.map((col, idx) => (
       <div className="nft-card" key={idx} style={{ minHeight: 300 }}>
-        {/* Render collection info */}
+        {col.imageUrl ? (
+          <img
+  src={col.imageUrl || 'https://via.placeholder.com/300x200?text=No+Image'}
+  alt="Cover"
+  style={{ width: '100%', maxHeight: 200, objectFit: 'cover', cursor: 'pointer' }}
+  onClick={() => handleCollectionClick(col)}
+/>
+
+        ) : (
+          <img
+            src="https://via.placeholder.com/300x200?text=No+Cover"
+            alt="No Cover"
+            style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }}
+          />
+        )}
+
+        <div style={{ padding: 10 }}>
+          <div style={{ fontWeight: 'bold', fontSize: 16 }}>{col.name}</div>
+          <div>{col.description}</div>
+          <div style={{ fontSize: 12, marginTop: 5 }}>
+            Created: {col.createdTime}
+          </div>
+          <div style={{ fontSize: 12 }}>
+            Token Count: {col.tokenIds.length}
+          </div>
+        </div>
       </div>
     ))}
   </div>
 )}
+
+
+{selectedCollection && collectionNFTs.length > 0 && (
+  <div style={{ marginTop: 40 }}>
+    <h3 style={{ fontSize: 20, marginBottom: 10 }}>
+      NFTs in Collection #{selectedCollection}
+    </h3>
+    <div className="nft-grid">
+      {collectionNFTs.map((nft, idx) => (
+        <div key={idx} className="nft-card" style={{ minHeight: 250 }}>
+          <img
+            src={nft.image}
+            alt={nft.name}
+            style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }}
+          />
+          <div style={{ padding: 10 }}>
+  <div style={{ fontWeight: 'bold' }}>{nft.name}</div>
+  <div style={{ fontSize: 12 }}>Token ID: {nft.tokenId}</div>
+  <div style={{ fontSize: 12 }}>Creator: {shortenAddress(nft.creator)}</div>
+  <div style={{ fontSize: 12 }}>Created: {nft.createdTime}</div>
+  <div style={{ fontSize: 12 }}>Royalty: {nft.royaltyRate}%</div>
+  <div style={{ fontSize: 12 }}>
+    Category: {nft.mainCategory}/{nft.subCategory}
+  </div>
+</div>
+
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+
 
       </div>
     );

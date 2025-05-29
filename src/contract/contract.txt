@@ -144,8 +144,6 @@ uint256 private constant COLLECTION_LISTING_FEE = 10_000 * 10 ** 6;
     mapping(uint256 => mapping(uint256 => uint256)) private _collNftPrices;
 
     event CollectionCreated(uint256 indexed cId, address indexed creator, string name, string img);
-    event CollectionListed(uint256 indexed cId, address indexed seller, uint256 totalPrice);
-    event CollectionUnlisted(uint256 indexed cId);
     event CollectionNftSold(uint256 indexed cId, uint256 indexed tokenId, address buyer, uint256 price);
 
     // ----------------------------------------------------------------------------
@@ -528,115 +526,6 @@ modifier onlyOwner() {
         return _curCollId;
     }
 
-    // ----------------------------------------------------------------------------
-    // Koleksiyon Listing / Tek Tek Fiyat - Satın Alma
-    // ----------------------------------------------------------------------------
-    function listCollection(uint256 cid, uint256[] memory prices) public nonReentrant {
-    Collection memory col = _colls[cid];
-    uint256[] memory tids = col.tIds;
-    if (tids.length != prices.length) revert AM();
-
-    for (uint256 i = 0; i < tids.length; i++) {
-        if (_owns[tids[i]] != msg.sender) revert CNO();
-        if (_mItems[tids[i]].listed) revert NICL();
-    }
-
-    if (_collMItems[cid].listed) revert CAL();
-
-    uint256 sumPrice;
-    for (uint256 i = 0; i < tids.length; i++) {
-        if (prices[i] < MIN_PRICE || prices[i] > MAX_PRICE) revert IP();
-        _collNftPrices[cid][tids[i]] = prices[i];
-        sumPrice += prices[i];
-    }
-
-    // 🔹 Charge collection listing fee
-    require(paymentToken.transferFrom(msg.sender, address(this), COLLECTION_LISTING_FEE), "Collection fee failed");
-    paymentToken.burn(COLLECTION_LISTING_FEE);
-
-    CollMItem memory item = CollMItem({
-        cId: cid,
-        seller: payable(msg.sender),
-        price: sumPrice,
-        listed: true
-    });
-
-    _collMItems[cid] = item;
-    _updateAllCollMItems(cid, item);
-
-    emit CollectionListed(cid, msg.sender, sumPrice);
-}
-
-
-
-    function unlistCollection(uint256 cid) public {
-        CollMItem storage it = _collMItems[cid];
-        if (!it.listed) revert CNL();
-        if (it.seller != msg.sender) revert UZ();
-
-        it.listed = false;
-        it.price = 0;
-        _updateAllCollMItems(cid, it);
-        emit CollectionUnlisted(cid);
-    }
-
-    function buyCollection(uint256 cid) public nonReentrant {
-    CollMItem storage collItem = _collMItems[cid];
-    if (!collItem.listed) revert CNL();
-    if (collItem.seller == address(0)) revert NSC();
-
-    Collection memory c = _colls[cid];
-    uint256[] memory tIds = c.tIds;
-
-    uint256 totNeed;
-    for (uint256 i = 0; i < tIds.length; i++) {
-        uint256 tid = tIds[i];
-        if (_owns[tid] == collItem.seller && _collNftPrices[cid][tid] > 0) {
-            totNeed += _collNftPrices[cid][tid];
-        }
-    }
-
-    if (totNeed == 0) revert SS();
-
-    collItem.listed = false;
-    collItem.price = 0;
-    _updateAllCollMItems(cid, collItem);
-
-    for (uint256 i = 0; i < tIds.length; i++) {
-        uint256 tid = tIds[i];
-        uint256 nftPrice = _collNftPrices[cid][tid];
-        if (_owns[tid] == collItem.seller && nftPrice > 0) {
-            NFTData memory nd = _nftD[tid];
-            _handlePayment(msg.sender, collItem.seller, nd.creator, nftPrice, nd.rRate);
-            _mTransfer(collItem.seller, msg.sender, tid);
-            _collNftPrices[cid][tid] = 0;
-            emit CollectionNftSold(cid, tid, msg.sender, nftPrice);
-        }
-    }
-}
-
-
-    function buyNftFromCollection(uint256 cId, uint256 tid) public nonReentrant {
-    CollMItem storage collItem = _collMItems[cId];
-    if (!collItem.listed) revert CNL();
-    if (_owns[tid] != collItem.seller) revert CNO();
-
-    uint256 nftPrice = _collNftPrices[cId][tid];
-    if (nftPrice == 0) revert NFS(); // already sold
-
-    NFTData memory nd = _nftD[tid];
-    _handlePayment(msg.sender, collItem.seller, nd.creator, nftPrice, nd.rRate);
-
-    _mTransfer(collItem.seller, msg.sender, tid);
-    _collNftPrices[cId][tid] = 0;
-    emit CollectionNftSold(cId, tid, msg.sender, nftPrice);
-
-    // Update remaining price in the collection
-    uint256 oldPrice = collItem.price;
-    collItem.price = oldPrice > nftPrice ? (oldPrice - nftPrice) : 0;
-    _updateAllCollMItems(cId, collItem);
-}
-
 
     function getAllCollectionMarketItems() external view returns (CollMItem[] memory) {
         return _allCollM;
@@ -679,22 +568,6 @@ function adminUnlistNFT(uint256 tid) external onlyOwner {
 
     item.listed = false;
     _updateAllMItems(tid, item);
-}
-
-
-function adminUnlistCollectionNft(uint256 cId, uint256 tid) external onlyOwner {
-    CollMItem storage collItem = _collMItems[cId];
-    if (!collItem.listed) revert CNL();
-
-    uint256 nftPrice = _collNftPrices[cId][tid];
-    if (nftPrice == 0) revert NFS(); // Already sold or not listed individually
-
-    _collNftPrices[cId][tid] = 0;
-
-    // Update remaining collection price
-    uint256 oldPrice = collItem.price;
-    collItem.price = oldPrice > nftPrice ? (oldPrice - nftPrice) : 0;
-    _updateAllCollMItems(cId, collItem);
 }
 
 
