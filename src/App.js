@@ -91,6 +91,10 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
 
   const [selectedCollection, setSelectedCollection] = useState(null);
 
+  const [searchCollectionId, setSearchCollectionId] = useState('');
+const [searchedCollection, setSearchedCollection] = useState(null);
+
+
 
   // --------------------------------------------------
   // Category data (example)
@@ -110,6 +114,78 @@ const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
   if (!addr) return '';
   return addr.slice(0, 6) + '...' + addr.slice(-4);
 };
+
+
+const handleSearchCollectionById = async () => {
+  if (!searchCollectionId) {
+    toast.error("Please enter a Collection ID!");
+    return;
+  }
+
+  try {
+    setLoading(true);
+    const c = getContract();
+    const col = await c.getCollection(searchCollectionId);
+
+    if (!col[0] || col[0].trim() === '') {
+      toast.error("Collection not found or empty.");
+      return;
+    }
+
+    const tokenIds = col[5].map(x => x.toString());
+    const nftPromises = tokenIds.map(async (tokenId) => {
+      try {
+        const [
+          name, desc, url, metaUrl,
+          creator, cTime, rRate,
+          mainCat, subCat
+        ] = await c.getNFTData(tokenId);
+
+        let meta = {};
+        try {
+          if (metaUrl) {
+            const res = await fetch(metaUrl);
+            if (res.ok) meta = await res.json();
+          }
+        } catch (e) {
+          console.warn(`Metadata fetch failed for token ${tokenId}`);
+        }
+
+        return {
+          tokenId,
+          name: meta.name || name,
+          description: meta.description || desc,
+          image: resolveImageUrl(meta.image || url),
+          creator,
+          createdTime: new Date(Number(cTime) * 1000).toLocaleString(),
+          royaltyRate: rRate.toString(),
+          mainCategory: mainCat,
+          subCategory: subCat
+        };
+      } catch (e) {
+        console.warn("NFT fetch error:", e);
+        return null;
+      }
+    });
+
+    const nftDetails = (await Promise.all(nftPromises)).filter(Boolean);
+
+    setSearchedCollection({
+      name: col[0],
+      description: col[1],
+      imageUrl: resolveImageUrl(col[2]),
+      createdTime: new Date(Number(col[3]) * 1000).toLocaleString(),
+      creator: col[4],
+      tokenIds,
+      nfts: nftDetails
+    });
+  } catch (err) {
+    toast.error(err.message || "Search failed.");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
 
 
@@ -1786,6 +1862,70 @@ const handleCollectionClick = async (col) => {
             )}
           </div>
         )}
+
+
+        <hr style={{ margin: '30px 0' }} />
+<h3>Search Collection by ID</h3>
+
+<div className="form-group">
+  <label>Collection ID</label>
+  <input
+    value={searchCollectionId}
+    onChange={(e) => setSearchCollectionId(e.target.value)}
+    placeholder="Enter Collection ID"
+  />
+</div>
+
+<button className="primary-btn" onClick={handleSearchCollectionById}>
+  Get Collection Data
+</button>
+
+{searchedCollection && (
+  <div className="detail-box" style={{ marginTop: 20 }}>
+    <h4>Collection Information</h4>
+    <p><strong>Name:</strong> {searchedCollection.name}</p>
+    <p><strong>Description:</strong> {searchedCollection.description}</p>
+    {searchedCollection.imageUrl && (
+      <img src={searchedCollection.imageUrl} alt="Cover" style={{ maxWidth: 300, maxHeight: 300 }} />
+    )}
+    <p><strong>Created:</strong> {searchedCollection.createdTime}</p>
+    <p><strong>Creator:</strong> {shortenAddress(searchedCollection.creator)}</p>
+    <p><strong>Token IDs:</strong> {searchedCollection.tokenIds.join(', ')}</p>
+    {searchedCollection.nfts?.length > 0 && (
+  <>
+    <hr />
+    <h4>NFTs in this Collection</h4>
+    <div className="nft-grid">
+      {searchedCollection.nfts.map((nft, idx) => (
+        <div className="nft-card" key={idx}>
+          {nft.image ? (
+            <img src={nft.image} alt={nft.name} />
+          ) : (
+            <img src="https://via.placeholder.com/300x300?text=No+Img" alt="No Img" />
+          )}
+          <div className="nft-card-content">
+            <div className="nft-card-title">{nft.name || 'NFT #' + nft.tokenId}</div>
+            <div className="nft-card-desc">
+              {nft.description?.length > 50
+                ? nft.description.slice(0, 50) + '...'
+                : nft.description}
+            </div>
+            <div style={{ marginTop: 10 }}>Token ID: {nft.tokenId}</div>
+            <div>Royalty: {nft.royaltyRate}%</div>
+            <div>Creator: {shortenAddress(nft.creator)}</div>
+            <div>Created: {nft.createdTime}</div>
+            <div>Category: {nft.mainCategory}/{nft.subCategory}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </>
+)}
+
+  </div>
+)}
+
+
       </div>
     );
   };
@@ -1887,7 +2027,6 @@ const handleCollectionClick = async (col) => {
           <img
   src={col.imageUrl || 'https://via.placeholder.com/300x200?text=No+Image'}
   alt="Cover"
-  style={{ width: '100%', maxHeight: 200, objectFit: 'cover', cursor: 'pointer' }}
   onClick={() => handleCollectionClick(col)}
 />
 
@@ -1895,7 +2034,6 @@ const handleCollectionClick = async (col) => {
           <img
             src="https://via.placeholder.com/300x200?text=No+Cover"
             alt="No Cover"
-            style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }}
           />
         )}
 
@@ -1926,7 +2064,6 @@ const handleCollectionClick = async (col) => {
           <img
             src={nft.image}
             alt={nft.name}
-            style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }}
           />
           <div style={{ padding: 10 }}>
   <div style={{ fontWeight: 'bold' }}>{nft.name}</div>

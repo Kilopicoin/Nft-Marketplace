@@ -511,16 +511,29 @@ modifier onlyOwner() {
 
 
     function getCollection(uint256 cid)
-        public
-        view
-        returns (
-            string memory, string memory, string memory,
-            uint256, address, uint256[] memory
-        )
-    {
-        Collection memory c = _colls[cid];
-        return (c.name, c.desc, c.img, c.cTime, c.creator, c.tIds);
+    public
+    view
+    returns (
+        string memory,    // collection name
+        string memory,    // collection desc
+        string memory,    // collection img
+        uint256,          // collection creation time
+        address,          // collection creator
+        uint256[] memory, // token IDs
+        string[] memory   // 🔹 metaUrls for those token IDs
+    )
+{
+    Collection memory c = _colls[cid];
+    uint256[] memory tids = c.tIds;
+    string[] memory metaUrls = new string[](tids.length);
+
+    for (uint256 i = 0; i < tids.length; i++) {
+        metaUrls[i] = _nftD[tids[i]].metaUrl;
     }
+
+    return (c.name, c.desc, c.img, c.cTime, c.creator, tids, metaUrls);
+}
+
 
     function getCollectionCount() external view returns (uint256) {
         return _curCollId;
