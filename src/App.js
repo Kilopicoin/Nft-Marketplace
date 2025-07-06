@@ -56,7 +56,7 @@ function App() {
   const [nftMetaUrl, setNftMetaUrl] = useState('');
 
   const [showMyNfts, setShowMyNfts] = useState(false);
-const [showMyCollections, setShowMyCollections] = useState(false);
+const [showMyCollections] = useState(false);
 
 // Constants
 const LIST_NFT_PRICE = (1000 * 10 ** 6).toString();
@@ -422,26 +422,27 @@ const handleCollectionClick = async (col) => {
         if (!col[0] || col[0].trim() === "") continue;
         const imgUrl = resolveImageUrl(col[2]);
         const tokenIds = col[5];
-        let allOwned = true;
+        let ownsAtLeastOne = false;
 
-        for (const tId of tokenIds) {
-          const ow = await c.ownerOf(tId);
-          if (ow.toLowerCase() !== account.toLowerCase()) {
-            allOwned = false;
-            break;
-          }
-        }
-        if (allOwned) {
-          foundCols.push({
-            collectionId: i.toString(),
-            name: col[0],
-            description: col[1],
-            imageUrl: imgUrl,
-            createdTime: new Date(Number(col[3]) * 1000).toLocaleString(),
-            creator: col[4],
-            tokenIds: col[5].map(x => x.toString())
-          });
-        }
+for (const tId of tokenIds) {
+  const ow = await c.ownerOf(tId);
+  if (ow.toLowerCase() === account.toLowerCase()) {
+    ownsAtLeastOne = true;
+    break;
+  }
+}
+if (ownsAtLeastOne) {
+  foundCols.push({
+    collectionId: i.toString(),
+    name: col[0],
+    description: col[1],
+    imageUrl: imgUrl,
+    createdTime: new Date(Number(col[3]) * 1000).toLocaleString(),
+    creator: col[4],
+    tokenIds: col[5].map(x => x.toString())
+  });
+}
+
       }
       setMyCollections(foundCols);
     } catch (err) {
@@ -727,12 +728,12 @@ const handleCollectionClick = async (col) => {
         name: d[0],
         description: d[1],
         url: resolveImageUrl(d[2]),
-        creator: d[3],
-        createdTime: new Date(Number(d[4]) * 1000).toLocaleString(),
-        royaltyRate: d[5]?.toString() || '0',
-        mainCategory: d[6],
-        subCategory: d[7],
-        collId: d[8]?.toString()
+        creator: d[4],
+        createdTime: new Date(Number(d[5]) * 1000).toLocaleString(),
+        royaltyRate: d[6]?.toString() || '0',
+        mainCategory: d[7],
+        subCategory: d[8],
+        collId: d[9]?.toString()
       });
     } catch (err) {
       toast.error(err.message || String(err));
@@ -1163,6 +1164,7 @@ const handleCollectionClick = async (col) => {
       <div className="app-content">
         {renderMessages()}
         <h2>Create Single NFT</h2>
+        <label>Requires 10 000 LOP tokens (Automatically Burns)</label>
         <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
 
 
@@ -1175,11 +1177,11 @@ const handleCollectionClick = async (col) => {
           <input value={nftDesc} onChange={(e) => setNftDesc(e.target.value)} />
         </div>
         <div className="form-group">
-          <label>URL (IPFS/http)</label>
+          <label>Image URL (IPFS/https)</label>
           <input value={nftUrl} onChange={(e) => setNftUrl(e.target.value)} />
         </div>
         <div className="form-group">
-  <label>Metadata URL (IPFS/http)</label>
+  <label>Metadata URL (IPFS/https)</label>
   <input value={nftMetaUrl} onChange={(e) => setNftMetaUrl(e.target.value)} />
 </div>
 
@@ -1244,6 +1246,7 @@ const handleCollectionClick = async (col) => {
       <div className="app-content">
         {renderMessages()}
         <h2>Create Collection</h2>
+        <label>Requires 10 000 LOP tokens (Automatically Burns)</label>
         <p className="note">Wallet: {account ? shortenAddress(account) : 'Not connected'}</p>
 
 
@@ -1298,7 +1301,7 @@ const handleCollectionClick = async (col) => {
                 />
               </div>
               <div className="form-group">
-                <label>URL</label>
+                <label>Image URL</label>
                 <input
                   value={it.url}
                   onChange={(e) => {
@@ -1532,6 +1535,9 @@ const handleCollectionClick = async (col) => {
             <button className="primary-btn" onClick={handleListNFT} disabled={!account}>
               List
             </button>
+            <br/>
+            <label>Requires 1000 LOP tokens (Automatically Burns)</label>
+            
           </div>
         )}
 
@@ -1591,21 +1597,16 @@ const handleCollectionClick = async (col) => {
             <p>TokenID: {selectedNftDetails.tokenId}</p>
             <p>Name: {selectedNftDetails.name}</p>
             <p>Description: {selectedNftDetails.description}</p>
-            <p>URL: {selectedNftDetails.url}</p>
-            <p>Meta URL: {selectedNftDetails.metaUrl}</p>
             {selectedNftDetails.url && (
               <img style={{ maxWidth: 300, maxHeight: 300 }} src={selectedNftDetails.url} alt="Detail" />
             )}
-            <p>Creator: {shortenAddress(selectedNftDetails.creator)}</p>
 
             <p>Created Time: {selectedNftDetails.createdTime}</p>
             <p>Royalty: {selectedNftDetails.royaltyRate}</p>
             <p>
               Category: {selectedNftDetails.mainCategory}/{selectedNftDetails.subCategory}
             </p>
-            {selectedNftDetails.collId !== "0" && (
-              <p>This NFT is minted in Collection #{selectedNftDetails.collId}.</p>
-            )}
+              <p>Collection ID = {selectedNftDetails.collId}</p>
           </div>
         )}
       </div>
@@ -1847,7 +1848,6 @@ const handleCollectionClick = async (col) => {
             <p>TokenID: {nftData.tokenId}</p>
             <p>Name: {nftData.name}</p>
             <p>Description: {nftData.description}</p>
-            <p>URL: {nftData.url}</p>
             {nftData.url && (
               <img src={nftData.url} alt="Search" style={{ maxWidth: 300, maxHeight: 300 }} />
             )}
@@ -1944,7 +1944,7 @@ const handleCollectionClick = async (col) => {
         <p className="note">Account: {account || 'Not connected'}</p>
 
         <hr />
-        <h3>My Single NFTs</h3>
+        <h3>My NFTs</h3>
 <button
   className="secondary-btn"
   onClick={async () => {
@@ -1952,7 +1952,7 @@ const handleCollectionClick = async (col) => {
     await fetchMyNFTs();
   }}
 >
-  Show My Single NFTs
+  Show My NFTs
 </button>
 
 {showMyNfts && myNFTs.length > 0 && (
@@ -2008,16 +2008,7 @@ const handleCollectionClick = async (col) => {
 
 
         <hr />
-        <h3>My Collections</h3>
-<button
-  className="secondary-btn"
-  onClick={async () => {
-    setShowMyCollections(true);
-    await fetchMyCollections();
-  }}
->
-  Show My Collections
-</button>
+
 
 {showMyCollections && myCollections.length > 0 && (
   <div className="nft-grid">

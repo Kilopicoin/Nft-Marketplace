@@ -90,6 +90,7 @@ error SS();      // SomeNftSold
 uint256 private constant MAX_PRICE = 100_000 * 10 ** 6;   // 100,000 tokens
 uint256 private constant NFT_LISTING_FEE = 1000 * 10 ** 6;
 uint256 private constant COLLECTION_LISTING_FEE = 10_000 * 10 ** 6;
+uint256 private constant NFT_MINT_FEE = 10_000 * 10 ** 6; // 10,000 LOP
 
 
     // NFT Data
@@ -289,7 +290,13 @@ modifier onlyOwner() {
     string memory sC
 ) public returns (uint256) 
 {
-    if (r > 100) revert IO();
+    if (r > 30) revert IO();
+
+    // 🔴 Require mint fee
+    require(paymentToken.transferFrom(msg.sender, address(this), NFT_MINT_FEE), "Mint fee failed");
+    paymentToken.burn(NFT_MINT_FEE);
+
+
     _curTokenId++;
     uint256 nt = _curTokenId;
     _owns[nt] = msg.sender;
@@ -390,7 +397,7 @@ modifier onlyOwner() {
 }
 
 
-    function unlistNFT(uint256 tid) public {
+    function unlistNFT(uint256 tid) public nonReentrant {
         MarketItem storage it = _mItems[tid];
         if (!it.listed) revert NL();
         if (it.seller != msg.sender) revert UZ();
@@ -462,6 +469,12 @@ modifier onlyOwner() {
 {
     uint256 l = n.length;
     if (l < 5 || l > 30) revert R5430();
+
+    // 🔴 Require mint fee
+    require(paymentToken.transferFrom(msg.sender, address(this), NFT_MINT_FEE), "Mint fee failed");
+    paymentToken.burn(NFT_MINT_FEE);
+
+    
     if (
         l != ds.length || l != us.length || l != mus.length || // 🔹 Check mus array too
         l != rs.length || l != mc.length || l != sc.length
@@ -472,7 +485,7 @@ modifier onlyOwner() {
     uint256[] memory tids = new uint256[](l);
 
     for (uint256 i = 0; i < l; i++) {
-        if (rs[i] > 100) revert IO(); // Royalty check
+        if (rs[i] > 30) revert IO(); // Royalty check
 
         _curTokenId++;
         uint256 nt = _curTokenId;
