@@ -60,6 +60,7 @@ const [showMyCollections] = useState(false);
 
 // Constants
 const LIST_NFT_PRICE = (1000 * 10 ** 6).toString();
+const CREATE_NFT_PRICE = (10000 * 10 ** 6).toString();
 const LIST_COLLECTION_PRICE = (10000 * 10 ** 6).toString();
 
 
@@ -548,11 +549,15 @@ if (ownsAtLeastOne) {
         return;
       }
       const rr = parseInt(royaltyRate) || 0;
-      if (rr < 0 || rr > 100) {
-        toast.error('Royalty must be between 0..100!');
+      if (rr < 0 || rr > 30) {
+        toast.error('Royalty must be between 0..30!');
         setLoading(false);
         return;
       }
+
+      const tokenContractSigner = await getTokenSignerContract();
+    const allowanceTx = await tokenContractSigner.increaseAllowance(contractAddress, CREATE_NFT_PRICE);
+    await allowanceTx.wait();
 
       const sc = await getSignerContract();
       const tx = await sc.createNFT(
@@ -800,6 +805,10 @@ if (ownsAtLeastOne) {
       const sc = collectionNFTs.map(x => x.subCategory);
 
       console.log({ n, ds, us, mus, rs, mc, sc });
+
+      const tokenContractSigner = await getTokenSignerContract();
+    const allowanceTx = await tokenContractSigner.increaseAllowance(contractAddress, CREATE_NFT_PRICE);
+    await allowanceTx.wait();
 
       
       const scn = await getSignerContract();
@@ -1536,7 +1545,11 @@ if (ownsAtLeastOne) {
               List
             </button>
             <br/>
+            <label>Min 100, Max 10.000.000 LOP tokens</label>
+            <br/>
             <label>Requires 1000 LOP tokens (Automatically Burns)</label>
+            <br/>
+            <label>When purchased, a 10 percent burn rate and royalty percentage will be deducted from the set price.</label>
             
           </div>
         )}
@@ -1857,9 +1870,7 @@ if (ownsAtLeastOne) {
             <p>
               Category: {nftData.mainCategory} / {nftData.subCategory}
             </p>
-            {nftData.collId !== "0" && (
               <p>Collection ID: {nftData.collId}</p>
-            )}
           </div>
         )}
 
